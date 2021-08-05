@@ -7,7 +7,7 @@ from absl import app, flags
 from tqdm import tqdm
 
 from third_party.xiuminglib import xiuminglib as xm
-from data_gen.util import read_light, listify_matrix
+from data_gen.util import listify_matrix
 from nerfactor.util import img as imgutil
 
 import bpy
@@ -15,10 +15,9 @@ from mathutils import Matrix
 
 
 flags.DEFINE_string('scene_path', '', "path to the Blender scene")
-flags.DEFINE_string('light_path', '', "path to the light probe")
+#flags.DEFINE_string('light_path', '', "path to the light probe")
 flags.DEFINE_string('cam_dir', '', "directory containing the camera JSONs")
-flags.DEFINE_string(
-    'test_light_dir', '', "directory containing the test (novel) light probes")
+#flags.DEFINE_string('test_light_dir', '', "directory containing the test (novel) light probes")
 flags.DEFINE_integer('vali_first_n', 8, "")
 flags.DEFINE_float('light_inten', 3, "global scale for the light probe")
 flags.DEFINE_integer('res', 512, "resolution of the squre renders")
@@ -53,7 +52,6 @@ def main(_):
         if FLAGS.debug:
             frames = frames[:1]
 
-        # Correct the paths in JSON, to be JaxNeRF-compatible
         data = {'camera_angle_x': cam_angle_x, 'frames': []}
         for i, frame in enumerate(frames):
             folder = f'{mode}_{i:03d}'
@@ -78,14 +76,13 @@ def main(_):
     vali_cams = xm.io.json.load(vali_cams_json)['frames']
     test_cams = xm.io.json.load(test_cams_json)['frames']
     train_vali_cams = train_cams + vali_cams
-    train_vali_trans = np.vstack([
-        np.array(x['transform_matrix'])[:3, 3] for x in train_vali_cams])
+    train_vali_trans = np.vstack([np.array(x['transform_matrix'])[:3, 3] for x in train_vali_cams])
 
     # Compute average light (top half only) to use as background
-    light = read_light(FLAGS.light_path)
-    light = xm.img.tonemap(light, method='gamma', gamma=4)
-    avg_light = np.mean(
-        light[:(light.shape[0] // 2), :, :], axis=(0, 1), keepdims=True)
+    #light = read_light(FLAGS.light_path)
+    #light = xm.img.tonemap(light, method='gamma', gamma=4)
+    #avg_light = np.mean(
+    #    light[:(light.shape[0] // 2), :, :], axis=(0, 1), keepdims=True)
 
     # For each test view
     for test_cam in tqdm(test_cams, desc="Saving Nearest Input for Test Views"):
@@ -123,7 +120,8 @@ def render_view(cam_transform_mat, cam_angle_x, outdir):
             'cam_transform_mat': cam_transform_mat_str,
             'cam_angle_x': cam_angle_x, 'envmap': basename(FLAGS.light_path),
             'envmap_inten': FLAGS.light_inten, 'imh': FLAGS.res,
-            'imw': FLAGS.res, 'spp': FLAGS.spp}
+            'imw': FLAGS.res, 'spp': FLAGS.spp
+        }
         xm.io.json.write(data, metadata_json)
 
     # Open scene
@@ -163,14 +161,16 @@ def render_view(cam_transform_mat, cam_angle_x, outdir):
     cam_obj.matrix_world = Matrix(cam_transform_mat)
     bpy.context.view_layer.update()
 
-    # Add environment lighting
-    xm.blender.light.add_light_env(
-        env=FLAGS.light_path, strength=FLAGS.light_inten)
+    xm.blender.light.add_light_point(
+      xyz=tuple(cam_transform_mat[:3, -1]),
+      name="colocated_pt",
+      energy=FLAGS.light_inten,
+    )
 
     # Rendering settings
     xm.blender.render.easyset(w=FLAGS.res, h=FLAGS.res, n_samples=FLAGS.spp)
-    # if args.direct_only:
-    #     bpy.context.scene.cycles.max_bounces = 0
+    # XXX If need to set more bounces can do it here
+    # bpy.context.scene.cycles.max_bounces = 0
 
     # Render RGBA
     rgba_png = join(outdir, 'rgba.png')
@@ -185,30 +185,31 @@ def render_view(cam_transform_mat, cam_angle_x, outdir):
         xm.blender.scene.save_blend(snapshot_path)
 
     # Render relit ground truth
-    if FLAGS.test_light_dir is not None:
-        # With HDR maps
-        for envmap_path in xm.os.sortglob(FLAGS.test_light_dir, '*.hdr'):
-            envmap_name = basename(envmap_path).split('.')[0]
-            outpath = join(outdir, 'rgba_%s.png' % envmap_name)
-            if exists(outpath):
-                continue
-            xm.blender.light.add_light_env(env=envmap_path, strength=1.)
-            xm.blender.render.render(outpath, cam=cam_obj)
-        # With OLAT
-        for envmap_path in xm.os.sortglob(FLAGS.test_light_dir, '*.json'):
-            envmap_name = basename(envmap_path).split('.')[0]
-            outpath = join(outdir, 'rgba_%s.png' % envmap_name)
-            if exists(outpath):
-                continue
-            olat = xm.io.json.load(envmap_path)
-            # NOTE: not using intensity in JSON; because Blender uses Watts
-            # (and fall-off), it's impossible to match exactly our predictions
-            xm.blender.light.add_light_env(
-                env=(1, 1, 1, 1), strength=0) # ambient
-            pt_light = xm.blender.light.add_light_point( # point
-                xyz=olat['point_location'], energy=50_000)
-            xm.blender.render.render(outpath, cam=cam_obj)
-            xm.blender.object.remove_objects(pt_light.name) # avoid light accu.
+    # FIXME Need to redo this?
+    #if FLAGS.test_light_dir is not None:
+    #    # With HDR maps
+    #    for envmap_path in xm.os.sortglob(FLAGS.test_light_dir, '*.hdr'):
+    #        envmap_name = basename(envmap_path).split('.')[0]
+    #        outpath = join(outdir, 'rgba_%s.png' % envmap_name)
+    #        if exists(outpath):
+    #            continue
+    #        xm.blender.light.add_light_env(env=envmap_path, strength=1.)
+    #        xm.blender.render.render(outpath, cam=cam_obj)
+    #    # With OLAT
+    #    for envmap_path in xm.os.sortglob(FLAGS.test_light_dir, '*.json'):
+    #        envmap_name = basename(envmap_path).split('.')[0]
+    #        outpath = join(outdir, 'rgba_%s.png' % envmap_name)
+    #        if exists(outpath):
+    #            continue
+    #        olat = xm.io.json.load(envmap_path)
+    #        # NOTE: not using intensity in JSON; because Blender uses Watts
+    #        # (and fall-off), it's impossible to match exactly our predictions
+    #        xm.blender.light.add_light_env(
+    #            env=(1, 1, 1, 1), strength=0) # ambient
+    #        pt_light = xm.blender.light.add_light_point( # point
+    #            xyz=olat['point_location'], energy=50_000)
+    #        xm.blender.render.render(outpath, cam=cam_obj)
+    #        xm.blender.object.remove_objects(pt_light.name) # avoid light accu.
 
     # Render albedo
     # Let's assume white specularity, so the diffuse_color alone is albedo
